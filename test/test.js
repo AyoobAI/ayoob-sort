@@ -119,6 +119,62 @@ ok('sort asc string', eq(sort([3, 1, 4], 'asc'), [1, 3, 4]));
 ok('sortByKey string key', eq(sortByKey([{p:3},{p:1},{p:2}], 'p').map(x => x.p), [1, 2, 3]));
 ok('sort key string option', eq(sort([{p:3},{p:1}], { key: 'p' }).map(x => x.p), [1, 3]));
 
+// ── sortByKey: wide-range integer keys (radix path) ──
+ok('sortByKey wide-range ints', (() => {
+  const arr = Array.from({length: 5000}, (_, i) => ({ id: i, v: Math.floor(Math.random() * 2e9) - 1e9 }));
+  const r = sortByKey(arr, 'v');
+  for (let i = 1; i < r.length; i++) if (r[i].v < r[i-1].v) return false;
+  return true;
+})());
+ok('sortByKey wide negative ints', (() => {
+  const arr = [{v:-1000000},{v:-1},{v:-500000},{v:0},{v:-999999}];
+  const r = sortByKey(arr, x => x.v);
+  return eq(r.map(x => x.v), [-1000000, -999999, -500000, -1, 0]);
+})());
+ok('sortByKey wide stability', (() => {
+  const arr = Array.from({length: 2000}, (_, i) => ({ k: (i % 200) * 100000, idx: i }));
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  const inputPos = new Map(); arr.forEach((v, i) => inputPos.set(v, i));
+  const r = sortByKey(arr, x => x.k);
+  for (let i = 1; i < r.length; i++) {
+    if (r[i].k === r[i-1].k && inputPos.get(r[i]) < inputPos.get(r[i-1])) return false;
+  }
+  return true;
+})());
+
+// ── sortByKey: float keys (float radix path) ──
+ok('sortByKey float keys', (() => {
+  const arr = Array.from({length: 1000}, () => ({ v: Math.random() * 1000 - 500 }));
+  const r = sortByKey(arr, x => x.v);
+  for (let i = 1; i < r.length; i++) if (r[i].v < r[i-1].v) return false;
+  return true;
+})());
+ok('sortByKey float negative keys', (() => {
+  const arr = [{v:-3.5},{v:-1.1},{v:-7.8},{v:-0.001}];
+  const r = sortByKey(arr, x => x.v);
+  return eq(r.map(x => x.v), [-7.8, -3.5, -1.1, -0.001]);
+})());
+ok('sortByKey small float array (comparator path)', (() => {
+  const arr = Array.from({length: 50}, (_, i) => ({ v: Math.random() * 100 }));
+  const r = sortByKey(arr, x => x.v);
+  for (let i = 1; i < r.length; i++) if (r[i].v < r[i-1].v) return false;
+  return true;
+})());
+ok('sortByKey NaN keys no crash', (() => {
+  const arr = [{v:3},{v:NaN},{v:1}];
+  const r = sortByKey(arr, x => x.v);
+  return r.length === 3;
+})());
+ok('sortByKey immutable', (() => {
+  const arr = [{v:3},{v:1},{v:2}];
+  const copy = arr.slice();
+  sortByKey(arr, x => x.v);
+  return arr.every((v, i) => v === copy[i]);
+})());
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) { console.log('✗ FAILED'); process.exit(1); }
 console.log('✓ ALL PASSED');

@@ -566,12 +566,130 @@ function stableAdaptiveMergeSort(arr, n) {
 // ═══════════════════════════════════════════════════════════════
 
 /**
+ * Stable LSD Radix Sort on indices by integer keys.
+ * Sorts indices[0..n-1] so that keys[indices[i]] is in ascending order.
+ * Uses base-256, skips no-op passes. O(n) time.
+ *
+ * @param {number[]} keys - Extracted numeric keys (integers)
+ * @param {number} n - Array length
+ * @param {number} min - Minimum key value
+ * @param {number} max - Maximum key value
+ * @returns {Int32Array} Sorted index array
+ */
+function radixSortIndices(keys, n, min, max) {
+  const noNorm = min >= 0;
+  const normKeys = new Int32Array(n);
+  if (noNorm) {
+    for (let i = 0; i < n; i++) normKeys[i] = keys[i];
+  } else {
+    for (let i = 0; i < n; i++) normKeys[i] = keys[i] - min;
+  }
+
+  const mxv = noNorm ? max : max - min;
+  const bytes = mxv <= 0xFF ? 1 : mxv <= 0xFFFF ? 2 : mxv <= 0xFFFFFF ? 3 : 4;
+
+  let from = new Int32Array(n);
+  for (let i = 0; i < n; i++) from[i] = i;
+  let to = new Int32Array(n);
+
+  for (let byteIdx = 0; byteIdx < bytes; byteIdx++) {
+    const shift = byteIdx * 8;
+    const cnt = new Int32Array(256);
+    for (let i = 0; i < n; i++) cnt[(normKeys[from[i]] >>> shift) & 255]++;
+
+    // Skip no-op passes
+    let skip = false;
+    for (let i = 0; i < 256; i++) {
+      if (cnt[i] === n) { skip = true; break; }
+    }
+    if (skip) continue;
+
+    // Prefix sum
+    for (let i = 1; i < 256; i++) cnt[i] += cnt[i - 1];
+
+    // Backward scatter (stable)
+    for (let i = n - 1; i >= 0; i--) {
+      to[--cnt[(normKeys[from[i]] >>> shift) & 255]] = from[i];
+    }
+
+    const tmp = from; from = to; to = tmp;
+  }
+
+  return from;
+}
+
+/**
+ * Stable LSD Radix Sort on indices by float keys.
+ * Uses IEEE 754 bit transformation to convert floats to sortable
+ * unsigned integers, then LSD radix-256 on 8 bytes.
+ * Returns sorted index array. O(n) time.
+ *
+ * @param {number[]} keys - Extracted numeric keys (floats)
+ * @param {number} n - Array length
+ * @returns {Int32Array} Sorted index array
+ */
+function floatRadixSortIndices(keys, n) {
+  // Store float keys in a shared buffer for bit manipulation
+  const buf = new ArrayBuffer(n * 8);
+  const f64 = new Float64Array(buf);
+  const u32 = new Uint32Array(buf);
+  const u8 = new Uint8Array(buf);
+
+  for (let i = 0; i < n; i++) f64[i] = keys[i];
+
+  // Transform: float bits → sortable unsigned integer bits
+  for (let i = 0; i < n; i++) {
+    const hi = i * 2 + 1;
+    const lo = i * 2;
+    if (u32[hi] & 0x80000000) {
+      u32[hi] = ~u32[hi] >>> 0;
+      u32[lo] = ~u32[lo] >>> 0;
+    } else {
+      u32[hi] = (u32[hi] | 0x80000000) >>> 0;
+    }
+  }
+
+  // LSD Radix Sort on indices using the transformed bytes
+  let from = new Int32Array(n);
+  for (let i = 0; i < n; i++) from[i] = i;
+  let to = new Int32Array(n);
+
+  for (let byteIdx = 0; byteIdx < 8; byteIdx++) {
+    const cnt = new Uint32Array(256);
+
+    for (let i = 0; i < n; i++) cnt[u8[from[i] * 8 + byteIdx]]++;
+
+    // Skip no-op passes
+    let skip = false;
+    for (let v = 0; v < 256; v++) { if (cnt[v] === n) { skip = true; break; } }
+    if (skip) continue;
+
+    // Prefix sum
+    for (let v = 1; v < 256; v++) cnt[v] += cnt[v - 1];
+
+    // Backward scatter (stable)
+    for (let i = n - 1; i >= 0; i--) {
+      to[--cnt[u8[from[i] * 8 + byteIdx]]] = from[i];
+    }
+
+    const tmp = from; from = to; to = tmp;
+  }
+
+  return from;
+}
+
+/**
  * Sort an array of objects by a numeric key function.
  * Extracts keys once, sorts indices with the adaptive engine,
  * then reorders objects. STABLE. Up to 16.9x faster than .sort().
+ *
+ * Routes to the optimal strategy based on key properties:
+ *   - Dense integer range (range ≤ n×2): counting sort on indices
+ *   - Wide integer range: LSD radix-256 on indices
+ *   - Float keys: IEEE 754 radix sort on indices
  * 
  * @param {Object[]} arr - Array of objects
- * @param {Function} keyFn - Function that extracts a numeric key from each object
+ * @param {Function|string} keyFn - Function that extracts a numeric key, or field name string
  * @returns {Object[]} New sorted array
  */
 function sortByKey(arr, keyFn) {
@@ -588,16 +706,28 @@ function sortByKey(arr, keyFn) {
   const keys = new Array(n);
   let allInt = true;
   let min = Infinity, max = -Infinity;
+  let hasNaN = false;
 
   for (let i = 0; i < n; i++) {
     const k = keyFn(arr[i]);
     keys[i] = k;
+    if (k !== k) { hasNaN = true; allInt = false; continue; } // NaN check
     if (k !== (k | 0) || k < -2147483648 || k > 2147483647) allInt = false;
     if (k < min) min = k;
     if (k > max) max = k;
   }
 
-  // If keys are integers with reasonable range, use counting sort on indices
+  // NaN keys — fall back to stable comparator sort
+  if (hasNaN) {
+    const indices = new Array(n);
+    for (let i = 0; i < n; i++) indices[i] = i;
+    indices.sort((a, b) => keys[a] - keys[b] || a - b);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = arr[indices[i]];
+    return out;
+  }
+
+  // ── PATH 1: Counting sort for dense integer ranges ──
   if (allInt && !isNaN(min) && !isNaN(max)) {
     const range = max - min;
     if (range <= n * 2) {
@@ -616,12 +746,27 @@ function sortByKey(arr, keyFn) {
       for (let i = 0; i < n; i++) out[i] = arr[sortedIndices[i]];
       return out;
     }
+
+    // ── PATH 2: Radix sort for wide-range integers ──
+    const sortedIndices = radixSortIndices(keys, n, min, max);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = arr[sortedIndices[i]];
+    return out;
   }
 
-  // Fallback: sort indices with stable comparator
+  // ── PATH 3: Float radix sort on indices ──
+  // For small arrays, the typed array setup cost dominates — use comparator
+  if (n >= 256) {
+    const sortedIndices = floatRadixSortIndices(keys, n);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = arr[sortedIndices[i]];
+    return out;
+  }
+
+  // Small float arrays — comparator is faster than radix setup
   const indices = new Array(n);
   for (let i = 0; i < n; i++) indices[i] = i;
-  indices.sort((a, b) => keys[a] - keys[b] || a - b); // || a - b for stability
+  indices.sort((a, b) => keys[a] - keys[b] || a - b);
 
   const out = new Array(n);
   for (let i = 0; i < n; i++) out[i] = arr[indices[i]];

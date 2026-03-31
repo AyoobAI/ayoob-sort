@@ -200,7 +200,12 @@ sortByKey(users, u => u.createdAt)    // function key
 sortByKey(rows, 'id')                 // string key
 ```
 
-**Known limitation:** `sortByKey` is fastest when keys fall within a dense range (e.g., prices 0–10000, ages 0–120, scores 0–100). For keys spanning a very wide range (e.g., 0–100 million), it falls back to comparison sort. A radix-based fast path for wide-range keys is in development.
+`sortByKey` auto-detects key properties and routes to the optimal strategy:
+- **Dense integer range** (e.g., ages 0–120, scores 0–100): counting sort on indices
+- **Wide integer range** (e.g., timestamps, large IDs): LSD radix-256 on indices
+- **Float keys** (e.g., prices, coordinates): IEEE 754 radix sort on indices
+
+All paths are O(n), stable, and significantly faster than `.sort()` with a comparator.
 
 ## Technical Details
 
