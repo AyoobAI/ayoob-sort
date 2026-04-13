@@ -54,6 +54,16 @@ bench('50K duplicates', dupes,
 bench('10K objects by key', objs,
   d => sortByKey(d, x => x.id), d => d.slice().sort((a, b) => a.id - b.id), 15);
 
+// Object sorting: wide-range keys (radix path)
+const objsWide = Array.from({length: 10000}, () => ({ id: Math.floor(Math.random() * 2e9) - 1e9, x: 'data' }));
+bench('10K objects by wide-range key', objsWide,
+  d => sortByKey(d, x => x.id), d => d.slice().sort((a, b) => a.id - b.id), 15);
+
+// Object sorting: float keys (float radix path)
+const objsFloat = Array.from({length: 10000}, () => ({ price: Math.random() * 10000, x: 'data' }));
+bench('10K objects by float key', objsFloat,
+  d => sortByKey(d, x => x.price), d => d.slice().sort((a, b) => a.price - b.price), 15);
+
 // Small arrays (UI-typical sizes)
 const small1K = Array.from({length: 1000}, () => Math.floor(Math.random() * 10000));
 const small5K = Array.from({length: 5000}, () => Math.floor(Math.random() * 50000));
